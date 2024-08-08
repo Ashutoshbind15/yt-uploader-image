@@ -1,9 +1,15 @@
+import { createClient } from "redis";
+
 const dummyMetadata = {
   title: "Your Video Title",
   description: "Your Video Description",
   tags: ["tag1", "tag2"],
   categoryId: "22", // Example category
   privacyStatus: "private", // 'private', 'public', or 'unlisted'
+};
+
+const publishMessage = (channel, message, publisher) => {
+  publisher.publish(channel, message);
 };
 
 const fetchVideoFromUrl = async (url) => {
@@ -14,7 +20,14 @@ const fetchVideoFromUrl = async (url) => {
   return response.blob(); // Convert the response to a blob
 };
 
-async function uploadVideo(accessToken, videoFile, metadata = dummyMetadata) {
+async function uploadVideo(
+  accessToken,
+  videoFile,
+  client,
+  vid,
+  uid,
+  metadata = dummyMetadata
+) {
   const url =
     "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status";
 
@@ -68,13 +81,42 @@ async function uploadVideo(accessToken, videoFile, metadata = dummyMetadata) {
     if (uploadResponse.ok) {
       console.log("Video uploaded successfully");
 
+      publishMessage(
+        `upload-status`,
+        JSON.stringify({
+          uid: uid,
+          vid: vid,
+          status: "uploaded",
+        }),
+        client
+      );
+
       const uploadResult = await uploadResponse.json();
       console.log(uploadResult);
       return uploadResult;
     } else {
+      publishMessage(
+        `upload-status`,
+        JSON.stringify({
+          uid: uid,
+          vid: vid,
+          status: "upload-failed",
+        }),
+        client
+      );
       console.error("Video upload failed", uploadResponse.statusText);
     }
   } else {
+    publishMessage(
+      `upload-status`,
+      JSON.stringify({
+        uid: uid,
+        vid: vid,
+        status: "initiation-failed",
+      }),
+      client
+    );
+
     console.error("Failed to initiate upload", response.statusText);
   }
 }
@@ -83,9 +125,24 @@ const init = async () => {
   const url = process.env.VIDEO_URI;
   const accessToken = process.env.ACCESS_TOKEN;
 
+  const vid = process.env.VIDEO_ID;
+  const uid = process.env.USER_ID;
+
+  const client = await createClient({
+    url: process.env.REDIS_URL,
+  })
+    .on("error", (err) => console.log("Redis Client Error", err))
+    .connect();
+
   try {
     const videoFile = await fetchVideoFromUrl(url);
-    const uploadResult = await uploadVideo(accessToken, videoFile);
+    const uploadResult = await uploadVideo(
+      accessToken,
+      videoFile,
+      client,
+      vid,
+      uid
+    );
     console.log(uploadResult);
   } catch (error) {
     console.error(error);
